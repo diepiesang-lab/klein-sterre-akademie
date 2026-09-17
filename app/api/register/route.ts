@@ -13,36 +13,23 @@ export async function POST(request: Request) {
     const contactNumber = clean(body.parent?.contactNumber);
     const slotId = clean(body.slotId);
     const children = Array.isArray(body.children) ? body.children : [];
-
     if (!firstName || !lastName || !contactNumber) return Response.json({ error: "Vul die ouer/voog se naam, van en kontaknommer in." }, { status: 400 });
     if (children.length < 1 || children.length > 6) return Response.json({ error: "Kies tussen 1 en 6 kinders." }, { status: 400 });
     if (!slotId) return Response.json({ error: "Kies asseblief 'n sessieslot." }, { status: 400 });
 
-    const normalizedChildren = children.map((child: {firstName?:unknown;lastName?:unknown;age?:unknown}) => ({
-      first_name: clean(child.firstName),
-      last_name: clean(child.lastName),
-      age: Number(child.age),
-    }));
-    if (normalizedChildren.some((child) => !child.first_name || !child.last_name || !Number.isInteger(child.age) || child.age < 3 || child.age > 18)) {
-      return Response.json({ error: "Elke kind moet 'n naam, van en ouderdom tussen 3 en 18 hê." }, { status: 400 });
-    }
+    const normalizedChildren = children.map((child: {firstName?:unknown;lastName?:unknown;age?:unknown}) => ({ first_name: clean(child.firstName), last_name: clean(child.lastName), age: Number(child.age) }));
+    if (normalizedChildren.some((child) => !child.first_name || !child.last_name || !Number.isInteger(child.age) || child.age < 3 || child.age > 18)) return Response.json({ error: "Elke kind moet 'n naam, van en ouderdom tussen 3 en 18 hê." }, { status: 400 });
 
-    const slots = await db.get("slots", `select=id,capacity& id=eq.${encodeURIComponent(slotId)}`) as Array<{id:string;capacity:number}>;
+    const slots = await db.get("slots", `select=id,capacity&id=eq.${encodeURIComponent(slotId)}`) as Array<{id:string;capacity:number}>;
     if (!slots.length) return Response.json({ error: "Die gekose sessie bestaan nie meer nie." }, { status: 404 });
-
     const bookings = await db.get("bookings", `select=id,status&slot_id=eq.${encodeURIComponent(slotId)}&status=in.(pending,confirmed)`) as Array<{id:string}>;
     if (bookings.length >= slots[0].capacity) return Response.json({ error: "Daardie sessie is reeds vol." }, { status: 409 });
 
     const parentRows = await db.insert("parents", { first_name: firstName, last_name: lastName, contact_number: contactNumber, child_count: normalizedChildren.length }) as Array<{id:string}>;
     const parentId = parentRows[0]?.id;
     if (!parentId) throw new Error("Parent could not be created.");
-
     await db.insert("children", normalizedChildren.map((child) => ({ ...child, parent_id: parentId })));
     const bookingRows = await db.insert("bookings", { parent_id: parentId, slot_id: slotId, status: "pending" }) as Array<{id:string}>;
-
     return Response.json({ ok: true, bookingId: bookingRows[0]?.id, message: "Bespreking ontvang. Dit wag nou vir admin-bevestiging." });
-  } catch (error) {
-    console.error(error);
-    return Response.json({ error: "Ons kon die registrasie nie voltooi nie. Probeer asseblief weer." }, { status: 500 });
-  }
+  } catch (error) { console.error(error); return Response.json({ error: "Ons kon die registrasie nie voltooi nie. Probeer asseblief weer." }, { status: 500 }); }
 }
