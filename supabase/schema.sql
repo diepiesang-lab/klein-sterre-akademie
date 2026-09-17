@@ -33,6 +33,7 @@ create table if not exists public.bookings (
   id uuid primary key default gen_random_uuid(),
   parent_id uuid not null references public.parents(id) on delete cascade,
   slot_id uuid not null references public.slots(id) on delete cascade,
+  child_count integer not null check (child_count between 1 and 6),
   status text not null default 'pending' check (status in ('pending','confirmed','rejected','cancelled')),
   created_at timestamptz not null default now(),
   confirmed_at timestamptz
