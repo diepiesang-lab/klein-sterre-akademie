@@ -2,9 +2,7 @@ import { adminAllowed, databaseConfigured, db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-function auth(request: Request) {
-  return adminAllowed(request.headers.get("x-admin-pin"));
-}
+function auth(request: Request) { return adminAllowed(request.headers.get("x-admin-pin")); }
 
 export async function GET(request: Request) {
   if (!databaseConfigured()) return Response.json({ configured: false });
@@ -17,10 +15,7 @@ export async function GET(request: Request) {
       db.get("bookings", "select=id,parent_id,slot_id,status,created_at,confirmed_at&order=created_at.desc"),
     ]);
     return Response.json({ configured: true, parents, children, slots, bookings });
-  } catch (error) {
-    console.error(error);
-    return Response.json({ error: "Kon admin-data nie laai nie." }, { status: 500 });
-  }
+  } catch (error) { console.error(error); return Response.json({ error: "Kon admin-data nie laai nie." }, { status: 500 }); }
 }
 
 export async function POST(request: Request) {
@@ -42,7 +37,7 @@ export async function POST(request: Request) {
     if (action === "delete_slot") {
       const slotId = String(body.slotId || "").trim();
       if (!slotId) return Response.json({ error: "Slot ontbreek." }, { status: 400 });
-      const bookings = await db.get("bookings", `select=id&slot_id=eq.${encodeURIComponent(slotId)}&status=in.(pending,confirmed)`);
+      const bookings = await db.get("bookings", `select=id&slot_id=eq.${encodeURIComponent(slotId)}&status=in.(pending,confirmed)`) as Array<{id:string}>;
       if (bookings.length) return Response.json({ error: "Jy kan nie 'n slot met aktiewe besprekings verwyder nie." }, { status: 409 });
       await db.delete("slots", `id=eq.${encodeURIComponent(slotId)}`);
       return Response.json({ ok: true });
@@ -53,9 +48,9 @@ export async function POST(request: Request) {
       const status = String(body.status || "").trim();
       if (!bookingId || !["confirmed", "rejected", "cancelled"].includes(status)) return Response.json({ error: "Ongeldige status." }, { status: 400 });
       if (status === "confirmed") {
-        const rows = await db.get("bookings", `select=id,slot_id,status& id=eq.${encodeURIComponent(bookingId)}`) as Array<{id:string;slot_id:string;status:string}>;
+        const rows = await db.get("bookings", `select=id,slot_id,status&id=eq.${encodeURIComponent(bookingId)}`) as Array<{id:string;slot_id:string;status:string}>;
         if (!rows.length) return Response.json({ error: "Bespreking nie gevind nie." }, { status: 404 });
-        const slotRows = await db.get("slots", `select=capacity& id=eq.${encodeURIComponent(rows[0].slot_id)}`) as Array<{capacity:number}>;
+        const slotRows = await db.get("slots", `select=capacity&id=eq.${encodeURIComponent(rows[0].slot_id)}`) as Array<{capacity:number}>;
         const active = await db.get("bookings", `select=id&slot_id=eq.${encodeURIComponent(rows[0].slot_id)}&status=eq.confirmed`) as Array<{id:string}>;
         if (slotRows.length && active.length >= slotRows[0].capacity) return Response.json({ error: "Die sessie het reeds sy maksimum bevestigde besprekings bereik." }, { status: 409 });
         await db.update("bookings", `id=eq.${encodeURIComponent(bookingId)}`, { status, confirmed_at: new Date().toISOString() });
@@ -66,8 +61,5 @@ export async function POST(request: Request) {
     }
 
     return Response.json({ error: "Onbekende admin-aksie." }, { status: 400 });
-  } catch (error) {
-    console.error(error);
-    return Response.json({ error: "Admin-aksie kon nie voltooi word nie." }, { status: 500 });
-  }
+  } catch (error) { console.error(error); return Response.json({ error: "Admin-aksie kon nie voltooi word nie." }, { status: 500 }); }
 }
