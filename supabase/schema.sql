@@ -1,5 +1,5 @@
 -- Klein Sterre Akademie database
--- Run this once in the Supabase SQL Editor.
+-- Run this in the Supabase SQL Editor.
 
 create extension if not exists pgcrypto;
 
@@ -26,7 +26,8 @@ create table if not exists public.slots (
   session_date date not null,
   session_time time not null,
   capacity integer not null default 3 check (capacity between 1 and 20),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  unique(session_date, session_time)
 );
 
 create table if not exists public.bookings (
