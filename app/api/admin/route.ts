@@ -35,11 +35,13 @@ export async function POST(request:Request){
    const rows=await db.get("bookings",`select=id,slot_id,child_count,status&id=eq.${encodeURIComponent(id)}`) as Array<{id:string;slot_id:string;child_count:number;status:string}>;
    if(!rows.length)return Response.json({error:"Bespreking nie gevind nie."},{status:404});
    if(status==="confirmed"){
-    const slots=await db.get("slots",`select=capacity&id=eq.${encodeURIComponent(rows[0].slot_id)}`) as Array<{capacity:number}>;
-    const active=await db.get("bookings",`select=id,child_count&slot_id=eq.${encodeURIComponent(rows[0].slot_id)}&status=eq.confirmed`) as Array<{id:string;child_count:number}>;
-    const used=active.reduce((n,b)=>n+Number(b.child_count||0),0);
-    if(slots.length&&used+Number(rows[0].child_count)>slots[0].capacity)return Response.json({error:"Daar is nie genoeg plek vir al die kinders in hierdie sessie nie."},{status:409});
-    await db.update("bookings",`id=eq.${encodeURIComponent(id)}`,{status,confirmed_at:new Date().toISOString()});
+    try { await db.rpc("confirm_booking",{p_booking_id:id}); }
+    catch(e) {
+     const message=e instanceof Error?e.message:"";
+     if(message.includes("capacity_exceeded"))return Response.json({error:"Daar is nie genoeg plek vir al die kinders in hierdie sessie nie."},{status:409});
+     if(message.includes("booking_not_found"))return Response.json({error:"Bespreking nie gevind nie."},{status:404});
+     throw e;
+    }
    }else await db.update("bookings",`id=eq.${encodeURIComponent(id)}`,{status});
    return Response.json({ok:true});
   }
