@@ -14,14 +14,14 @@ type AdminData = {
 const emptyChild=():Child=>({firstName:"",lastName:"",age:""});
 function monthDays(year:number,month:number){const first=new Date(year,month,1),total=new Date(year,month+1,0).getDate();return{start:(first.getDay()+6)%7,total};}
 
-export default function Home(){
+export default function Home({initialTab="book"}:{initialTab?:"book"|"register"}){
   const now=new Date();
   const [month,setMonth]=useState(new Date(now.getFullYear(),now.getMonth(),1));
   const [slots,setSlots]=useState<Slot[]>([]);
   const [selected,setSelected]=useState<Slot|null>(null);
   const [children,setChildren]=useState<Child[]>([emptyChild()]);
   const [parent,setParent]=useState({firstName:"",lastName:"",contactNumber:""});
-  const [tab,setTab]=useState<"book"|"register"|"admin">("book");
+  const [tab,setTab]=useState<"book"|"register"|"admin">(initialTab);
   const [adminPin,setAdminPin]=useState("");
   const [admin,setAdmin]=useState<AdminData|null>(null);
   const [adminTab,setAdminTab]=useState<"pending"|"confirmed"|"parents"|"sessions">("pending");
