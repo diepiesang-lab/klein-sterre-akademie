@@ -32,6 +32,7 @@ export const db = {
   insert: (table: string, values: unknown, select = "*") => request(table, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(values) }).then((data) => data),
   update: (table: string, query: string, values: unknown) => request(`${table}?${query}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(values) }),
   delete: (table: string, query: string) => request(`${table}?${query}`, { method: "DELETE" }),
+  rpc: (functionName: string, values: unknown) => request(`rpc/${functionName}`, { method: "POST", body: JSON.stringify(values) }),
 };
 
 export function adminAllowed(pin: string | null) {
