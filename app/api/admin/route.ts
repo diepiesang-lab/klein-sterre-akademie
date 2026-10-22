@@ -7,7 +7,7 @@ export async function GET(request:Request){
  if(!auth(request))return Response.json({error:"Unauthorized"},{status:401});
  try{
   const [parents,children,slots,bookings]=await Promise.all([
-   db.get("parents","select=id,first_name,last_name,contact_number,child_count,created_at&order=created_at.desc"),
+   db.get("parents","select=id,first_name,last_name,email,contact_number,child_count,created_at&order=created_at.desc"),
    db.get("children","select=id,parent_id,first_name,last_name,age"),
    db.get("slots","select=id,session_date,session_time,capacity&order=session_date.asc,session_time.asc"),
    db.get("bookings","select=id,parent_id,slot_id,child_count,status,created_at,confirmed_at&order=created_at.desc")
