@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type Slot = { id:string; date:string; time:string; capacity:number; booked:number; available:number };
 type Child = { firstName:string; lastName:string; age:string };
@@ -22,6 +23,8 @@ export default function Home({initialTab="book"}:{initialTab?:"book"|"register"|
   const [children,setChildren]=useState<Child[]>([emptyChild()]);
   const [parent,setParent]=useState({firstName:"",lastName:"",email:"",contactNumber:""});
   const [registeredParentId,setRegisteredParentId]=useState("");
+  const [authUser,setAuthUser]=useState<{id:string;email:string}|null>(null);
+  const [authReady,setAuthReady]=useState(false);
   const [tab,setTab]=useState<"book"|"register"|"admin">(initialTab);
   const [adminPin,setAdminPin]=useState("");
   const [admin,setAdmin]=useState<AdminData|null>(null);
@@ -32,7 +35,30 @@ export default function Home({initialTab="book"}:{initialTab?:"book"|"register"|
   const [newTime,setNewTime]=useState("15:00");
 
   async function loadSlots(){try{const r=await fetch("/api/slots");const d=await r.json();if(d.slots)setSlots(d.slots);else if(d.error)setNotice(d.error)}catch{setNotice("Kon nie sessies laai nie.")}}
-  useEffect(()=>{loadSlots();const saved=sessionStorage.getItem("ksa-admin-pin");if(saved){setAdminPin(saved);loadAdmin(saved)}},[]);
+  useEffect(()=>{loadSlots();const saved=sessionStorage.getItem("ksa-admin-pin");if(saved){setAdminPin(saved);loadAdmin(saved)}
+    async function loadParentAccount(){
+      try{
+        const supabase=createSupabaseBrowserClient();
+        const {data}=await supabase.auth.getUser();
+        const user=data.user;
+        if(user?.email){
+          setAuthUser({id:user.id,email:user.email});
+          setParent(current=>({...current,email:user.email!}));
+          const response=await fetch("/api/register");
+          if(response.ok){
+            const profile=await response.json();
+            if(profile.registered){
+              setRegisteredParentId(profile.parent.id);
+              setParent({firstName:profile.parent.first_name,lastName:profile.parent.last_name,email:user.email!,contactNumber:profile.parent.contact_number});
+              setChildren(profile.children.map((child:{first_name:string;last_name:string;age:number})=>({firstName:child.first_name,lastName:child.last_name,age:String(child.age)})));
+            }
+          }
+        }
+      }catch{setNotice("Kon nie by jou e-posrekening aanmeld nie.")}
+      finally{setAuthReady(true)}
+    }
+    void loadParentAccount();
+  },[]);
 
   async function loadAdmin(pin=adminPin){if(!pin)return;setLoading(true);try{const r=await fetch("/api/admin",{headers:{"x-admin-pin":pin}});const d=await r.json();if(!r.ok)throw new Error(d.error);setAdmin(d);sessionStorage.setItem("ksa-admin-pin",pin);setTab("admin")}catch{sessionStorage.removeItem("ksa-admin-pin");setAdmin(null);setNotice("Admin PIN is verkeerd of die databasis is nie gereed nie.")}finally{setLoading(false)}}
   function login(){const pin=prompt("Admin PIN:");if(pin)loadAdmin(pin)}
@@ -45,8 +71,42 @@ export default function Home({initialTab="book"}:{initialTab?:"book"|"register"|
   function changeChildren(value:number){setChildren(Array.from({length:value},(_,i)=>children[i]||emptyChild()));}
   function updateChild(index:number,key:keyof Child,value:string){setChildren(prev=>prev.map((c,i)=>i===index?{...c,[key]:value}:c));}
 
-  async function register(e:FormEvent){e.preventDefault();setLoading(true);setNotice("");try{const r=await fetch("/api/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({parent,children})});const d=await r.json();if(!r.ok)throw new Error(d.error);setRegisteredParentId(d.parentId);setNotice("Registrasie voltooi. Kies nou ’n beskikbare sessietyd.");await loadSlots()}catch(error){setNotice(error instanceof Error?error.message:"Registrasie kon nie voltooi word nie.")}finally{setLoading(false)}}
-  async function bookSession(e:FormEvent){e.preventDefault();if(!registeredParentId||!selected)return;setLoading(true);setNotice("");try{const r=await fetch("/api/bookings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({parentId:registeredParentId,slotId:selected.id})});const d=await r.json();if(!r.ok)throw new Error(d.error);setNotice("Jou bespreekversoek is ontvang en wag vir bevestiging. ’n E-pos sal gestuur word wanneer die akademie dit bevestig.");setRegisteredParentId("");setSelected(null);setParent({firstName:"",lastName:"",email:"",contactNumber:""});setChildren([emptyChild()]);await loadSlots();setTab("book")}catch(error){setNotice(error instanceof Error?error.message:"Bespreking kon nie voltooi word nie.")}finally{setLoading(false)}}
+  async function requestMagicLink(e:FormEvent){
+    e.preventDefault();setLoading(true);setNotice("");
+    try{
+      const supabase=createSupabaseBrowserClient();
+      const {error}=await supabase.auth.signInWithOtp({email:parent.email.trim().toLowerCase(),options:{emailRedirectTo:window.location.origin+"/auth/callback"}});
+      if(error)throw error;
+      setNotice("Aanmeldskakel gestuur. Bevestig jou e-posadres deur die skakel in jou inkassie oop te maak.");
+    }catch(error){setNotice(error instanceof Error?error.message:"Die e-posskakel kon nie gestuur word nie.")}
+    finally{setLoading(false)}
+  }
+  async function signOutParent(){
+    const {error}=await createSupabaseBrowserClient().auth.signOut();
+    if(error){setNotice("Kon nie afmeld nie.");return}
+    setAuthUser(null);setAuthReady(true);setRegisteredParentId("");setSelected(null);
+    setParent({firstName:"",lastName:"",email:"",contactNumber:""});setChildren([emptyChild()]);
+    setNotice("Jy is afgemeld.");
+  }
+  async function register(e:FormEvent){
+    e.preventDefault();if(!authUser)return;setLoading(true);setNotice("");
+    try{
+      const r=await fetch("/api/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({parent,children})});
+      const d=await r.json();if(!r.ok)throw new Error(d.error);
+      setRegisteredParentId(d.parentId);setNotice("Rekening geskep. Kies nou ’n beskikbare sessietyd.");await loadSlots();
+    }catch(error){setNotice(error instanceof Error?error.message:"Registrasie kon nie voltooi word nie.")}
+    finally{setLoading(false)}
+  }
+  async function bookSession(e:FormEvent){
+    e.preventDefault();if(!authUser||!registeredParentId||!selected)return;setLoading(true);setNotice("");
+    try{
+      const r=await fetch("/api/bookings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotId:selected.id})});
+      const d=await r.json();if(!r.ok)throw new Error(d.error);
+      setNotice("Jou bespreekversoek is ontvang en wag vir bevestiging. ’n E-pos sal gestuur word wanneer die akademie dit bevestig.");
+      setSelected(null);await loadSlots();
+    }catch(error){setNotice(error instanceof Error?error.message:"Bespreking kon nie voltooi word nie.")}
+    finally{setLoading(false)}
+  }
 
   async function adminAction(body:Record<string,unknown>){setLoading(true);try{const r=await fetch("/api/admin",{method:"POST",headers:{"Content-Type":"application/json","x-admin-pin":adminPin},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error);await loadAdmin();await loadSlots();setNotice(d.emailSent===false?"Bespreking bevestig, maar e-pos kon nie gestuur word nie. Kontroleer die e-posinstellings en stuur dit weer.":"Wysiging gestoor.")}catch(error){setNotice(error instanceof Error?error.message:"Admin-aksie kon nie voltooi word nie.")}finally{setLoading(false)}}
 
@@ -64,7 +124,7 @@ export default function Home({initialTab="book"}:{initialTab?:"book"|"register"|
 
       {tab==="book"&&<div className="grid"><section className="card"><div className="adminHeader"><div><h2>Sessiekalender</h2><div className="muted">Maksimum 3 kinders per sessie • R150 per sessie</div></div><div><button className="secondary" onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()-1,1))}>‹</button> <button className="secondary" onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()+1,1))}>›</button></div></div><h3 className="capitalize">{monthName}</h3><div className="calendar">{["Ma","Di","Wo","Do","Vr","Sa","So"].map(d=><div className="dayHead" key={d}>{d}</div>)}{cells.map((day,i)=>{if(!day)return <div key={i}/>;const iso=`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;const ds=visible.filter(s=>s.date===iso);return <div className="day" key={iso}><div className="date">{day}</div>{ds.map(s=><button key={s.id} className={`slot ${s.available===0?"full":s.available===1?"warn":""} ${selected?.id===s.id?"selected":""}`} disabled={s.available===0} onClick={()=>{setSelected(s);setTab("register")}}><strong>{s.time}</strong><br/>{s.available===0?"Vol":`${s.available} plek${s.available===1?"":"ke"} oor`}</button>)}</div>})}</div></section><aside className="card"><h2>Hoe dit werk</h2><div className="steps"><div><b>1</b><span>Kies ’n beskikbare sessie.</span></div><div><b>2</b><span>Registreer jou naam, van en kontaknommer.</span></div><div><b>3</b><span>Kies hoeveel kinders jy registreer en vul elke kind se naam, van en ouderdom in.</span></div><div><b>4</b><span>Stuur die versoek. Dit bly <strong>Pending</strong> totdat die akademie dit bevestig.</span></div></div><button className="primary wide" onClick={()=>setTab("register")}>Registreer ’n ouer/voog</button></aside></div>}
 
-      {tab==="register"&&<section className="card formCard"><div className="adminHeader"><div><h2>Ouer / voog registrasie</h2><div className="muted">Alle besprekings word eers as pending confirmation gestuur.</div></div>{selected&&<span className="selectedSession">{selected.date} • {selected.time}</span>}</div>{!registeredParentId?<form className="form" onSubmit={register}><div className="formGrid"><label>Naam<input value={parent.firstName} onChange={e=>setParent({...parent,firstName:e.target.value})} required placeholder="Ouer se naam"/></label><label>Van<input value={parent.lastName} onChange={e=>setParent({...parent,lastName:e.target.value})} required placeholder="Ouer se van"/></label></div><label>E-posadres<input type="email" value={parent.email} onChange={e=>setParent({...parent,email:e.target.value})} required placeholder="ouer@voorbeeld.co.za"/></label><label>Kontaknommer<input value={parent.contactNumber} onChange={e=>setParent({...parent,contactNumber:e.target.value})} required placeholder="WhatsApp / selfoonnommer"/></label><label>Hoeveel kinders wil jy registreer?<select value={children.length} onChange={e=>changeChildren(Number(e.target.value))}>{[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n} {n===1?"kind":"kinders"}</option>)}</select></label><div className="childrenGrid">{children.map((child,index)=><div className="childBox" key={index}><h3>Kind {index+1}</h3><div className="formGrid"><label>Naam<input value={child.firstName} onChange={e=>updateChild(index,"firstName",e.target.value)} required/></label><label>Van<input value={child.lastName} onChange={e=>updateChild(index,"lastName",e.target.value)} required/></label></div><label>Ouderdom<input type="number" min="3" max="18" value={child.age} onChange={e=>updateChild(index,"age",e.target.value)} required/></label></div>)}</div><button className="primary" disabled={loading}>{loading?"Stuur...":"Skep ouerregistrasie"}</button></form>:<form className="form" onSubmit={bookSession}><p>Registrasie vir {parent.firstName} {parent.lastName} ({parent.email}) is gereed. Kies ’n oop sessietyd hieronder.</p><label>Kies sessie<select value={selected?.id||""} onChange={e=>setSelected(slots.find(s=>s.id===e.target.value)||null)} required><option value="">Kies ’n beskikbare sessie</option>{slots.filter(s=>s.available>0).map(s=><option key={s.id} value={s.id}>{s.date} • {s.time} • {s.available} plekke oor</option>)}</select></label><button className="primary" disabled={loading||!selected}>{loading?"Stuur...":"Stuur bespreekversoek • R150 per sessie"}</button></form>}</section>}
+      {tab==="register"&&<section className="card formCard"><div className="adminHeader"><div><h2>Ouer / voog registrasie</h2><div className="muted">Alle besprekings word eers as pending confirmation gestuur.</div></div>{selected&&<span className="selectedSession">{selected.date} • {selected.time}</span>}</div>{!authReady?<p className="muted">Laai jou rekening…</p>:!authUser?<form className="form" onSubmit={requestMagicLink}><label>E-posadres<input type="email" value={parent.email} onChange={e=>setParent({...parent,email:e.target.value})} required placeholder="ouer@voorbeeld.co.za"/></label><button className="primary" disabled={loading}>{loading?"Stuur...":"Stuur veilige aanmeldskakel"}</button></form>:!registeredParentId?<><div className="adminHeader"><p>Geverifieerde e-pos: <strong>{authUser.email}</strong></p><button type="button" className="secondary" onClick={signOutParent}>Teken uit</button></div><form className="form" onSubmit={register}><div className="formGrid"><label>Naam<input value={parent.firstName} onChange={e=>setParent({...parent,firstName:e.target.value})} required placeholder="Ouer se naam"/></label><label>Van<input value={parent.lastName} onChange={e=>setParent({...parent,lastName:e.target.value})} required placeholder="Ouer se van"/></label></div><label>Kontaknommer<input value={parent.contactNumber} onChange={e=>setParent({...parent,contactNumber:e.target.value})} required placeholder="WhatsApp / selfoonnommer"/></label><label>Hoeveel kinders wil jy registreer?<select value={children.length} onChange={e=>changeChildren(Number(e.target.value))}>{[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n} {n===1?"kind":"kinders"}</option>)}</select></label><div className="childrenGrid">{children.map((child,index)=><div className="childBox" key={index}><h3>Kind {index+1}</h3><div className="formGrid"><label>Naam<input value={child.firstName} onChange={e=>updateChild(index,"firstName",e.target.value)} required/></label><label>Van<input value={child.lastName} onChange={e=>updateChild(index,"lastName",e.target.value)} required/></label></div><label>Ouderdom<input type="number" min="3" max="18" value={child.age} onChange={e=>updateChild(index,"age",e.target.value)} required/></label></div>)}</div><button className="primary" disabled={loading}>{loading?"Stoor...":"Skep ouerrekening"}</button></form></>:<><div className="adminHeader"><p>Ingeteken as <strong>{authUser.email}</strong></p><button type="button" className="secondary" onClick={signOutParent}>Teken uit</button></div><form className="form" onSubmit={bookSession}><p>Jou ouerrekening is gereed. Kies ’n oop sessietyd hieronder.</p><label>Kies sessie<select value={selected?.id||""} onChange={e=>setSelected(slots.find(s=>s.id===e.target.value)||null)} required><option value="">Kies ’n beskikbare sessie</option>{slots.filter(s=>s.available>0).map(s=><option key={s.id} value={s.id}>{s.date} • {s.time} • {s.available} plekke oor</option>)}</select></label><button className="primary" disabled={loading||!selected}>{loading?"Stuur...":"Stuur bespreekversoek • R150 per sessie"}</button></form></>}</section>}
 
       {tab==="admin"&&admin&&<div className="admin"><section className="card"><div className="adminHeader"><div><h2>Admin-beheer</h2><div className="muted">Bevestig bespreekversoeke voordat hulle finaal aanvaar word.</div></div><button className="secondary" onClick={()=>loadAdmin()}>{loading?"Laai...":"Verfris"}</button></div><div className="adminTabs"><button className={adminTab==="pending"?"active":""} onClick={()=>setAdminTab("pending")}>Pending Confirmations {pending.length>0&&<span className="count">{pending.length}</span>}</button><button className={adminTab==="confirmed"?"active":""} onClick={()=>setAdminTab("confirmed")}>Bevestig {confirmed.length}</button><button className={adminTab==="parents"?"active":""} onClick={()=>setAdminTab("parents")}>Geregistreerde ouers</button><button className={adminTab==="sessions"?"active":""} onClick={()=>setAdminTab("sessions")}>Sessies</button></div></section>
 
