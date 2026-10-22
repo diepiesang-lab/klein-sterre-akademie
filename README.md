@@ -13,6 +13,7 @@ Vercel-ready Next.js cricket academy booking app for parents and the academy adm
 - Every parent booking starts as **Pending Confirmation**
 - Admin **Pending Confirmations** tab
 - Admin can **Confirm**, **Reject** or cancel bookings
+- Booking confirmations are emailed to the parent, with an admin retry option
 - Admin view of registered parents and their children
 - Admin session creation/deletion
 - Shared database architecture using Supabase
@@ -55,11 +56,10 @@ Import `diepiesang-lab/klein-sterre-akademie` as a Next.js project and add all f
 
 ## Booking workflow
 
-1. Parent chooses a session.
-2. Parent enters name, surname and contact number.
-3. Parent chooses how many children to register and enters each child’s details.
-4. Parent creates their registration with a required email address.
-5. Parent selects one of the session times the admin opened and submits a booking request.
+1. Parent enters their name, surname, required email address and contact number.
+2. Parent chooses how many children to register and enters each child’s details.
+3. Parent creates their registration.
+4. Parent selects a timeslot opened by the admin and submits a booking request.
 6. The request appears in **Admin → Pending Confirmations**.
 7. Admin confirms or rejects it.
 8. The parent receives an email when the booking is confirmed.
