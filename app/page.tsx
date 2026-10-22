@@ -36,6 +36,9 @@ export default function Home({initialTab="book"}:{initialTab?:"book"|"register"|
 
   async function loadSlots(){try{const r=await fetch("/api/slots");const d=await r.json();if(d.slots)setSlots(d.slots);else if(d.error)setNotice(d.error)}catch{setNotice("Kon nie sessies laai nie.")}}
   useEffect(()=>{loadSlots();const saved=sessionStorage.getItem("ksa-admin-pin");if(saved){setAdminPin(saved);loadAdmin(saved)}
+    const verified=new URLSearchParams(window.location.search).get("verified");
+    if(verified==="1")setNotice("Jou e-pos is bevestig en jy is veilig ingeteken.");
+    else if(verified==="0")setNotice("Die e-posskakel het verval of is ongeldig. Vra asseblief ’n nuwe skakel aan.");
     async function loadParentAccount(){
       try{
         const supabase=createSupabaseBrowserClient();
