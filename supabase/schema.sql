@@ -8,13 +8,16 @@ create table if not exists public.parents (
   first_name text not null,
   last_name text not null,
   email text not null,
+  auth_user_id uuid not null unique references auth.users(id) on delete cascade,
   contact_number text not null,
   child_count integer not null check (child_count between 1 and 6),
   created_at timestamptz not null default now()
 );
 
 alter table public.parents add column if not exists email text;
+alter table public.parents add column if not exists auth_user_id uuid references auth.users(id) on delete cascade;
 create unique index if not exists parents_email_lower_idx on public.parents(lower(email)) where email is not null;
+create unique index if not exists parents_auth_user_id_idx on public.parents(auth_user_id) where auth_user_id is not null;
 
 create table if not exists public.children (
   id uuid primary key default gen_random_uuid(),
@@ -59,7 +62,7 @@ grant select, insert, update, delete on public.parents, public.children, public.
 
 
 -- Create the parent and children before a session is selected.
-create or replace function public.create_parent_registration(p_parent jsonb, p_children jsonb)
+create or replace function public.create_parent_registration(p_auth_user_id uuid, p_parent jsonb, p_children jsonb)
 returns jsonb
 language plpgsql
 security invoker
@@ -69,7 +72,7 @@ declare
   v_parent_id uuid;
   v_child_count integer;
 begin
-  if jsonb_typeof(p_parent) <> 'object'
+  if p_auth_user_id is null or jsonb_typeof(p_parent) <> 'object'
      or jsonb_typeof(p_children) <> 'array'
      or jsonb_array_length(p_children) not between 1 and 6
      or coalesce(trim(p_parent->>'first_name'), '') = ''
@@ -91,9 +94,9 @@ begin
   end if;
 
   begin
-    insert into public.parents(first_name, last_name, email, contact_number, child_count)
+    insert into public.parents(first_name, last_name, email, auth_user_id, contact_number, child_count)
     values (trim(p_parent->>'first_name'), trim(p_parent->>'last_name'),
-            lower(trim(p_parent->>'email')), trim(p_parent->>'contact_number'), v_child_count)
+            lower(trim(p_parent->>'email')), p_auth_user_id, trim(p_parent->>'contact_number'), v_child_count)
     returning id into v_parent_id;
   exception when unique_violation then
     raise exception using errcode = 'P0001', message = 'email_already_registered';
@@ -107,8 +110,11 @@ begin
 end;
 $$;
 
+drop function if exists public.create_parent_registration(jsonb, jsonb);
 drop function if exists public.create_booking(jsonb, jsonb, uuid);
-create or replace function public.create_booking(p_parent_id uuid, p_slot_id uuid)
+drop function if exists public.create_booking(uuid, uuid);
+drop function if exists public.create_booking(uuid, uuid, uuid);
+create or replace function public.create_booking(p_parent_id uuid, p_auth_user_id uuid, p_slot_id uuid)
 returns jsonb
 language plpgsql
 security invoker
@@ -120,7 +126,7 @@ declare
   v_child_count integer;
   v_booking_id uuid;
 begin
-  select child_count into v_child_count from public.parents where id = p_parent_id for key share;
+  select child_count into v_child_count from public.parents where id = p_parent_id and auth_user_id = p_auth_user_id for key share;
   if not found then
     raise exception using errcode = 'P0001', message = 'parent_not_found';
   end if;
@@ -182,9 +188,9 @@ begin
 end;
 $$;
 
-revoke all on function public.create_parent_registration(jsonb, jsonb) from public, anon, authenticated;
-revoke all on function public.create_booking(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.create_parent_registration(uuid, jsonb, jsonb) from public, anon, authenticated;
+revoke all on function public.create_booking(uuid, uuid, uuid) from public, anon, authenticated;
 revoke all on function public.confirm_booking(uuid) from public, anon, authenticated;
-grant execute on function public.create_parent_registration(jsonb, jsonb) to service_role;
-grant execute on function public.create_booking(uuid, uuid) to service_role;
+grant execute on function public.create_parent_registration(uuid, jsonb, jsonb) to service_role;
+grant execute on function public.create_booking(uuid, uuid, uuid) to service_role;
 grant execute on function public.confirm_booking(uuid) to service_role;
