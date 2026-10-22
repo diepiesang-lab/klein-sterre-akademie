@@ -1,3 +1,4 @@
+import { sendBookingConfirmation } from "@/lib/email";
 import { adminAllowed, databaseConfigured, db } from "@/lib/db";
 export const dynamic="force-dynamic";
 const auth=(r:Request)=>adminAllowed(r.headers.get("x-admin-pin"));
@@ -29,10 +30,21 @@ export async function POST(request:Request){
    if(b.length)return Response.json({error:"Jy kan nie 'n slot met aktiewe besprekings verwyder nie."},{status:409});
    await db.delete("slots",`id=eq.${encodeURIComponent(id)}`);return Response.json({ok:true});
   }
+  if(action==="resend_confirmation"){
+   const id=String(body.bookingId||"").trim();if(!id)return Response.json({error:"Bespreking ontbreek."},{status:400});
+   const rows=await db.get("bookings","select=id,parent_id,slot_id,status&id=eq."+encodeURIComponent(id)) as Array<{id:string;parent_id:string;slot_id:string;status:string}>;
+   if(!rows.length||rows[0].status!=="confirmed")return Response.json({error:"Slegs bevestigde besprekings kan weer per e-pos gestuur word."},{status:409});
+   const [parents,slots]=await Promise.all([
+    db.get("parents","select=email,first_name,last_name&id=eq."+encodeURIComponent(rows[0].parent_id)) as Promise<Array<{email:string;first_name:string;last_name:string}>> ,
+    db.get("slots","select=session_date,session_time&id=eq."+encodeURIComponent(rows[0].slot_id)) as Promise<Array<{session_date:string;session_time:string}>>
+   ]);
+   const sent=Boolean(parents[0]&&slots[0]&&await sendBookingConfirmation({to:parents[0].email,parentName:parents[0].first_name+" "+parents[0].last_name,date:slots[0].session_date,time:String(slots[0].session_time).slice(0,5)}));
+   return Response.json({ok:true,emailSent:sent});
+  }
   if(action==="booking_status"){
    const id=String(body.bookingId||"").trim(),status=String(body.status||"").trim();
    if(!id||!["confirmed","rejected","cancelled"].includes(status))return Response.json({error:"Ongeldige status."},{status:400});
-   const rows=await db.get("bookings",`select=id,slot_id,child_count,status&id=eq.${encodeURIComponent(id)}`) as Array<{id:string;slot_id:string;child_count:number;status:string}>;
+   const rows=await db.get("bookings",`select=id,parent_id,slot_id,child_count,status&id=eq.${encodeURIComponent(id)}`) as Array<{id:string;parent_id:string;slot_id:string;child_count:number;status:string}>;
    if(!rows.length)return Response.json({error:"Bespreking nie gevind nie."},{status:404});
    if(status==="confirmed"){
     try { await db.rpc("confirm_booking",{p_booking_id:id}); }
@@ -42,7 +54,13 @@ export async function POST(request:Request){
      if(message.includes("booking_not_found"))return Response.json({error:"Bespreking nie gevind nie."},{status:404});
      throw e;
     }
-   }else await db.update("bookings",`id=eq.${encodeURIComponent(id)}`,{status});
+    const [parents,slots]=await Promise.all([
+     db.get("parents","select=email,first_name,last_name&id=eq."+encodeURIComponent(rows[0].parent_id)) as Promise<Array<{email:string;first_name:string;last_name:string}>> ,
+     db.get("slots","select=session_date,session_time&id=eq."+encodeURIComponent(rows[0].slot_id)) as Promise<Array<{session_date:string;session_time:string}>>
+    ]);
+    const emailSent=Boolean(parents[0]&&slots[0]&&await sendBookingConfirmation({to:parents[0].email,parentName:parents[0].first_name+" "+parents[0].last_name,date:slots[0].session_date,time:String(slots[0].session_time).slice(0,5)}));
+    return Response.json({ok:true,emailSent});
+   }else await db.update("bookings","id=eq."+encodeURIComponent(id),{status});
    return Response.json({ok:true});
   }
   return Response.json({error:"Onbekende admin-aksie."},{status:400});
