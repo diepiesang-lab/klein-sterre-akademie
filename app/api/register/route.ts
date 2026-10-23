@@ -2,6 +2,7 @@ import { db, databaseConfigured } from "@/lib/db";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 export const dynamic="force-dynamic";
 const clean=(v:unknown)=>String(v??"").trim();
+type NormalizedChild={first_name:string;last_name:string;age:number};
 
 async function getVerifiedUser() {
  const supabase=await createSupabaseServerClient();
@@ -32,8 +33,8 @@ export async function POST(request:Request) {
   const children=Array.isArray(body.children)?body.children:[];
   if(!firstName||!lastName||!contactNumber)return Response.json({error:"Vul die ouer/voog se naam, van en kontaknommer in."},{status:400});
   if(children.length<1||children.length>6)return Response.json({error:"Kies tussen 1 en 6 kinders."},{status:400});
-  const normalized=children.map((c:{firstName?:unknown;lastName?:unknown;age?:unknown})=>({first_name:clean(c.firstName),last_name:clean(c.lastName),age:Number(c.age)}));
-  if(normalized.some(c=>!c.first_name||!c.last_name||!Number.isInteger(c.age)||c.age<3||c.age>18))return Response.json({error:"Elke kind moet ’n naam, van en ouderdom tussen 3 en 18 hê."},{status:400});
+  const normalized:NormalizedChild[]=children.map((c:{firstName?:unknown;lastName?:unknown;age?:unknown}):NormalizedChild=>({first_name:clean(c.firstName),last_name:clean(c.lastName),age:Number(c.age)}));
+  if(normalized.some((c:NormalizedChild)=>!c.first_name||!c.last_name||!Number.isInteger(c.age)||c.age<3||c.age>18))return Response.json({error:"Elke kind moet ’n naam, van en ouderdom tussen 3 en 18 hê."},{status:400});
   const data=await db.rpc("create_parent_registration",{p_auth_user_id:user.id,p_parent:{first_name:firstName,last_name:lastName,email:user.email,contact_number:contactNumber},p_children:normalized}) as {parentId?:string};
   return Response.json({ok:true,parentId:data?.parentId});
  }catch(error) {
