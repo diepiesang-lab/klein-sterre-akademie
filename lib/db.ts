@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SECRET_KEY;
 
@@ -37,5 +39,9 @@ export const db = {
 
 export function adminAllowed(pin: string | null) {
   const configured = process.env.ADMIN_PIN;
-  return Boolean(configured && pin && pin === configured);
+  if (!configured || !pin) return false;
+  const suppliedBytes = Buffer.from(pin);
+  const configuredBytes = Buffer.from(configured);
+  return suppliedBytes.length === configuredBytes.length && timingSafeEqual(suppliedBytes, configuredBytes);
 }
+
