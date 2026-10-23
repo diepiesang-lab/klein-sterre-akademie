@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./navy-theme.css";
 
 export const metadata: Metadata = {
   title: "Klein Sterre Akademie | Krieket Besprekings",
@@ -9,3 +10,4 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return <html lang="af"><body>{children}</body></html>;
 }
+

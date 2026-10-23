@@ -1,11 +1,13 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type Slot = { id:string; date:string; time:string; capacity:number; booked:number; available:number };
 type Child = { firstName:string; lastName:string; age:string };
 type AdminData = {
-  parents:Array<{id:string;first_name:string;last_name:string;contact_number:string;child_count:number;created_at:string}>;
+  parents:Array<{id:string;first_name:string;last_name:string;contact_number:string;email:string;child_count:number;created_at:string}>;
   children:Array<{id:string;parent_id:string;first_name:string;last_name:string;age:number}>;
   slots:Array<{id:string;session_date:string;session_time:string;capacity:number}>;
   bookings:Array<{id:string;parent_id:string;slot_id:string;status:string;created_at:string;confirmed_at?:string}>;
@@ -14,13 +16,16 @@ type AdminData = {
 const emptyChild=():Child=>({firstName:"",lastName:"",age:""});
 function monthDays(year:number,month:number){const first=new Date(year,month,1),total=new Date(year,month+1,0).getDate();return{start:(first.getDay()+6)%7,total};}
 
-export default function Home({initialTab="book"}:{initialTab?:"book"|"register"}){
+export default function Home({initialTab="book"}:{initialTab?:"book"|"register"|"admin"}){
   const now=new Date();
   const [month,setMonth]=useState(new Date(now.getFullYear(),now.getMonth(),1));
   const [slots,setSlots]=useState<Slot[]>([]);
   const [selected,setSelected]=useState<Slot|null>(null);
   const [children,setChildren]=useState<Child[]>([emptyChild()]);
-  const [parent,setParent]=useState({firstName:"",lastName:"",contactNumber:""});
+  const [parent,setParent]=useState({firstName:"",lastName:"",email:"",contactNumber:""});
+  const [registeredParentId,setRegisteredParentId]=useState("");
+  const [authUser,setAuthUser]=useState<{id:string;email:string}|null>(null);
+  const [authReady,setAuthReady]=useState(false);
   const [tab,setTab]=useState<"book"|"register"|"admin">(initialTab);
   const [adminPin,setAdminPin]=useState("");
   const [admin,setAdmin]=useState<AdminData|null>(null);
@@ -31,10 +36,36 @@ export default function Home({initialTab="book"}:{initialTab?:"book"|"register"}
   const [newTime,setNewTime]=useState("15:00");
 
   async function loadSlots(){try{const r=await fetch("/api/slots");const d=await r.json();if(d.slots)setSlots(d.slots);else if(d.error)setNotice(d.error)}catch{setNotice("Kon nie sessies laai nie.")}}
-  useEffect(()=>{loadSlots();const saved=sessionStorage.getItem("ksa-admin-pin");if(saved){setAdminPin(saved);loadAdmin(saved)}},[]);
+  useEffect(()=>{loadSlots();const saved=sessionStorage.getItem("ksa-admin-pin");if(saved){setAdminPin(saved);loadAdmin(saved)}
+    const verified=new URLSearchParams(window.location.search).get("verified");
+    if(verified==="1")setNotice("Jou e-pos is bevestig en jy is veilig ingeteken.");
+    else if(verified==="0")setNotice("Die e-posskakel het verval of is ongeldig. Vra asseblief ’n nuwe skakel aan.");
+    async function loadParentAccount(){
+      try{
+        const supabase=createSupabaseBrowserClient();
+        const {data}=await supabase.auth.getUser();
+        const user=data.user;
+        if(user?.email){
+          setAuthUser({id:user.id,email:user.email});
+          setParent(current=>({...current,email:user.email!}));
+          const response=await fetch("/api/register");
+          if(response.ok){
+            const profile=await response.json();
+            if(profile.registered){
+              setRegisteredParentId(profile.parent.id);
+              setParent({firstName:profile.parent.first_name,lastName:profile.parent.last_name,email:user.email!,contactNumber:profile.parent.contact_number});
+              setChildren(profile.children.map((child:{first_name:string;last_name:string;age:number})=>({firstName:child.first_name,lastName:child.last_name,age:String(child.age)})));
+            }
+          }
+        }
+      }catch{setNotice("Kon nie by jou e-posrekening aanmeld nie.")}
+      finally{setAuthReady(true)}
+    }
+    void loadParentAccount();
+  },[]);
 
-  async function loadAdmin(pin=adminPin){if(!pin)return;setLoading(true);try{const r=await fetch("/api/admin",{headers:{"x-admin-pin":pin}});const d=await r.json();if(!r.ok)throw new Error(d.error);setAdmin(d);sessionStorage.setItem("ksa-admin-pin",pin);setTab("admin")}catch{sessionStorage.removeItem("ksa-admin-pin");setAdmin(null);setNotice("Admin PIN is verkeerd of die databasis is nie gereed nie.")}finally{setLoading(false)}}
-  function login(){const pin=prompt("Admin PIN:");if(pin)loadAdmin(pin)}
+  async function loadAdmin(pin=adminPin){if(!pin)return;setLoading(true);setNotice("");try{const r=await fetch("/api/admin",{headers:{"x-admin-pin":pin}});const d=await r.json();if(!r.ok)throw new Error(r.status===503?"Die admin-databasis is nog nie gekoppel nie.":r.status===401?"Die Admin PIN is verkeerd.":d.error||"Admin-aanmelding het misluk.");setAdmin(d);sessionStorage.setItem("ksa-admin-pin",pin);setTab("admin")}catch(error){sessionStorage.removeItem("ksa-admin-pin");setAdmin(null);setNotice(error instanceof Error?error.message:"Admin-aanmelding het misluk.")}finally{setLoading(false)}}
+  function login(){setTab("admin");setNotice("")}
 
   const {start,total}=monthDays(month.getFullYear(),month.getMonth());
   const cells=useMemo(()=>Array.from({length:start+total},(_,i)=>i<start?null:i-start+1),[start,total]);
@@ -44,9 +75,44 @@ export default function Home({initialTab="book"}:{initialTab?:"book"|"register"}
   function changeChildren(value:number){setChildren(Array.from({length:value},(_,i)=>children[i]||emptyChild()));}
   function updateChild(index:number,key:keyof Child,value:string){setChildren(prev=>prev.map((c,i)=>i===index?{...c,[key]:value}:c));}
 
-  async function register(e:FormEvent){e.preventDefault();if(!selected)return;setLoading(true);setNotice("");try{const r=await fetch("/api/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({parent,children,slotId:selected.id})});const d=await r.json();if(!r.ok)throw new Error(d.error);setNotice("✅ Jou registrasie en bespreekversoek is ontvang. Dit verskyn nou onder Pending Confirmations vir die akademie.");setSelected(null);setParent({firstName:"",lastName:"",contactNumber:""});setChildren([emptyChild()]);await loadSlots();setTab("book")}catch(error){setNotice(error instanceof Error?error.message:"Registrasie kon nie voltooi word nie.")}finally{setLoading(false)}}
+  async function requestMagicLink(e:FormEvent){
+    e.preventDefault();setLoading(true);setNotice("");
+    try{
+      const supabase=createSupabaseBrowserClient();
+      const {error}=await supabase.auth.signInWithOtp({email:parent.email.trim().toLowerCase(),options:{emailRedirectTo:window.location.origin+"/auth/callback"}});
+      if(error)throw error;
+      setNotice("Aanmeldskakel gestuur. Bevestig jou e-posadres deur die skakel in jou inkassie oop te maak.");
+    }catch(error){setNotice(error instanceof Error?error.message:"Die e-posskakel kon nie gestuur word nie.")}
+    finally{setLoading(false)}
+  }
+  async function signOutParent(){
+    const {error}=await createSupabaseBrowserClient().auth.signOut();
+    if(error){setNotice("Kon nie afmeld nie.");return}
+    setAuthUser(null);setAuthReady(true);setRegisteredParentId("");setSelected(null);
+    setParent({firstName:"",lastName:"",email:"",contactNumber:""});setChildren([emptyChild()]);
+    setNotice("Jy is afgemeld.");
+  }
+  async function register(e:FormEvent){
+    e.preventDefault();if(!authUser)return;setLoading(true);setNotice("");
+    try{
+      const r=await fetch("/api/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({parent,children})});
+      const d=await r.json();if(!r.ok)throw new Error(d.error);
+      setRegisteredParentId(d.parentId);setNotice("Rekening geskep. Kies nou ’n beskikbare sessietyd.");await loadSlots();
+    }catch(error){setNotice(error instanceof Error?error.message:"Registrasie kon nie voltooi word nie.")}
+    finally{setLoading(false)}
+  }
+  async function bookSession(e:FormEvent){
+    e.preventDefault();if(!authUser||!registeredParentId||!selected)return;setLoading(true);setNotice("");
+    try{
+      const r=await fetch("/api/bookings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({slotId:selected.id})});
+      const d=await r.json();if(!r.ok)throw new Error(d.error);
+      setNotice("Jou bespreekversoek is ontvang en wag vir bevestiging. ’n E-pos sal gestuur word wanneer die akademie dit bevestig.");
+      setSelected(null);await loadSlots();
+    }catch(error){setNotice(error instanceof Error?error.message:"Bespreking kon nie voltooi word nie.")}
+    finally{setLoading(false)}
+  }
 
-  async function adminAction(body:Record<string,unknown>){setLoading(true);try{const r=await fetch("/api/admin",{method:"POST",headers:{"Content-Type":"application/json","x-admin-pin":adminPin},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error);await loadAdmin();await loadSlots();setNotice("Wysiging gestoor.")}catch(error){setNotice(error instanceof Error?error.message:"Admin-aksie kon nie voltooi word nie.")}finally{setLoading(false)}}
+  async function adminAction(body:Record<string,unknown>){setLoading(true);try{const r=await fetch("/api/admin",{method:"POST",headers:{"Content-Type":"application/json","x-admin-pin":adminPin},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error);await loadAdmin();await loadSlots();setNotice(d.emailSent===false?"Bespreking bevestig, maar e-pos kon nie gestuur word nie. Kontroleer die e-posinstellings en stuur dit weer.":"Wysiging gestoor.")}catch(error){setNotice(error instanceof Error?error.message:"Admin-aksie kon nie voltooi word nie.")}finally{setLoading(false)}}
 
   const parentMap=new Map((admin?.parents||[]).map(p=>[p.id,p]));
   const childMap=new Map((admin?.children||[]).map(c=>[c.parent_id,c]));
@@ -55,22 +121,24 @@ export default function Home({initialTab="book"}:{initialTab?:"book"|"register"}
   const confirmed=admin?.bookings.filter(b=>b.status==="confirmed")||[];
 
   return <div className="page">
-    <header className="top"><nav className="nav"><div className="brand"><div className="ball">🏏</div><div><strong>Klein Sterre Akademie</strong><span>Krieketontwikkeling vir jong sterre</span></div></div><button className="adminBtn" onClick={admin?()=>setTab(tab==="admin"?"book":"admin"):login}>{admin?(tab==="admin"?"Oueraansig":"Admin"):"Admin"}</button></nav><div className="hero"><div className="eyebrow">Krieket Akademie</div><h1>Elke Ster Begin Iewers.</h1><p>Registreer as ’n ouer/voog, voeg jou kinders by en stuur ’n krieketsessie-versoek. Die akademie bevestig elke bespreking.</p></div></header>
+    <header className="top"><nav className="nav"><div className="brand"><Image className="brandLogo" src="/images/klein-sterre-logo.jpg" alt="Klein Sterre Akademie logo" width={72} height={72} priority/><div><strong>Klein Sterre Akademie</strong><span>Krieketontwikkeling vir jong sterre</span></div></div><button className="adminBtn" onClick={admin?()=>setTab(tab==="admin"?"book":"admin"):login}>{admin?(tab==="admin"?"Oueraansig":"Admin"):"Admin"}</button></nav><div className="hero"><div className="eyebrow">Krieket Akademie</div><h1>Elke Ster Begin Iewers.</h1><p>Registreer as ’n ouer/voog, voeg jou kinders by en stuur ’n krieketsessie-versoek. Die akademie bevestig elke bespreking.</p></div></header>
     <main className="content">
       <div className="tabs"><button className={`tab ${tab==="book"?"active":""}`} onClick={()=>setTab("book")}>📅 Kies sessie</button><button className={`tab ${tab==="register"?"active":""}`} onClick={()=>setTab("register")}>👨‍👩‍👧 Registreer</button>{admin&&<button className={`tab ${tab==="admin"?"active":""}`} onClick={()=>setTab("admin")}>⚙️ Admin {pending.length>0&&<span className="count">{pending.length}</span>}</button>}</div>
       {notice&&<div className="notice">{notice}</div>}
 
       {tab==="book"&&<div className="grid"><section className="card"><div className="adminHeader"><div><h2>Sessiekalender</h2><div className="muted">Maksimum 3 kinders per sessie • R150 per sessie</div></div><div><button className="secondary" onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()-1,1))}>‹</button> <button className="secondary" onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()+1,1))}>›</button></div></div><h3 className="capitalize">{monthName}</h3><div className="calendar">{["Ma","Di","Wo","Do","Vr","Sa","So"].map(d=><div className="dayHead" key={d}>{d}</div>)}{cells.map((day,i)=>{if(!day)return <div key={i}/>;const iso=`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;const ds=visible.filter(s=>s.date===iso);return <div className="day" key={iso}><div className="date">{day}</div>{ds.map(s=><button key={s.id} className={`slot ${s.available===0?"full":s.available===1?"warn":""} ${selected?.id===s.id?"selected":""}`} disabled={s.available===0} onClick={()=>{setSelected(s);setTab("register")}}><strong>{s.time}</strong><br/>{s.available===0?"Vol":`${s.available} plek${s.available===1?"":"ke"} oor`}</button>)}</div>})}</div></section><aside className="card"><h2>Hoe dit werk</h2><div className="steps"><div><b>1</b><span>Kies ’n beskikbare sessie.</span></div><div><b>2</b><span>Registreer jou naam, van en kontaknommer.</span></div><div><b>3</b><span>Kies hoeveel kinders jy registreer en vul elke kind se naam, van en ouderdom in.</span></div><div><b>4</b><span>Stuur die versoek. Dit bly <strong>Pending</strong> totdat die akademie dit bevestig.</span></div></div><button className="primary wide" onClick={()=>setTab("register")}>Registreer ’n ouer/voog</button></aside></div>}
 
-      {tab==="register"&&<section className="card formCard"><div className="adminHeader"><div><h2>Ouer / voog registrasie</h2><div className="muted">Alle besprekings word eers as pending confirmation gestuur.</div></div>{selected&&<span className="selectedSession">{selected.date} • {selected.time}</span>}</div><form className="form" onSubmit={register}><div className="formGrid"><label>Naam<input value={parent.firstName} onChange={e=>setParent({...parent,firstName:e.target.value})} required placeholder="Ouer se naam"/></label><label>Van<input value={parent.lastName} onChange={e=>setParent({...parent,lastName:e.target.value})} required placeholder="Ouer se van"/></label></div><label>Kontaknommer<input value={parent.contactNumber} onChange={e=>setParent({...parent,contactNumber:e.target.value})} required placeholder="WhatsApp / selfoonnommer"/></label><label>Hoeveel kinders wil jy registreer?<select value={children.length} onChange={e=>changeChildren(Number(e.target.value))}>{[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n} {n===1?"kind":"kinders"}</option>)}</select></label><div className="childrenGrid">{children.map((child,index)=><div className="childBox" key={index}><h3>Kind {index+1}</h3><div className="formGrid"><label>Naam<input value={child.firstName} onChange={e=>updateChild(index,"firstName",e.target.value)} required/></label><label>Van<input value={child.lastName} onChange={e=>updateChild(index,"lastName",e.target.value)} required/></label></div><label>Ouderdom<input type="number" min="3" max="18" value={child.age} onChange={e=>updateChild(index,"age",e.target.value)} required/></label></div>)}</div><label>Kies sessie<select value={selected?.id||""} onChange={e=>setSelected(slots.find(s=>s.id===e.target.value)||null)} required><option value="">Kies ’n beskikbare sessie</option>{slots.filter(s=>s.available>0).map(s=><option key={s.id} value={s.id}>{s.date} • {s.time} • {s.available} plekke oor</option>)}</select></label><button className="primary" disabled={loading}>{loading?"Stuur...":"Stuur bespreekversoek • R150 per sessie"}</button></form></section>}
+      {tab==="register"&&<section className="card formCard"><div className="adminHeader"><div><h2>Ouer / voog registrasie</h2><div className="muted">Alle besprekings word eers as pending confirmation gestuur.</div></div>{selected&&<span className="selectedSession">{selected.date} • {selected.time}</span>}</div>{!authReady?<p className="muted">Laai jou rekening…</p>:!authUser?<form className="form" onSubmit={requestMagicLink}><label>E-posadres<input type="email" value={parent.email} onChange={e=>setParent({...parent,email:e.target.value})} required placeholder="ouer@voorbeeld.co.za"/></label><button className="primary" disabled={loading}>{loading?"Stuur...":"Stuur veilige aanmeldskakel"}</button></form>:!registeredParentId?<><div className="adminHeader"><p>Geverifieerde e-pos: <strong>{authUser.email}</strong></p><button type="button" className="secondary" onClick={signOutParent}>Teken uit</button></div><form className="form" onSubmit={register}><div className="formGrid"><label>Naam<input value={parent.firstName} onChange={e=>setParent({...parent,firstName:e.target.value})} required placeholder="Ouer se naam"/></label><label>Van<input value={parent.lastName} onChange={e=>setParent({...parent,lastName:e.target.value})} required placeholder="Ouer se van"/></label></div><label>Kontaknommer<input value={parent.contactNumber} onChange={e=>setParent({...parent,contactNumber:e.target.value})} required placeholder="WhatsApp / selfoonnommer"/></label><label>Hoeveel kinders wil jy registreer?<select value={children.length} onChange={e=>changeChildren(Number(e.target.value))}>{[1,2,3,4,5,6].map(n=><option key={n} value={n}>{n} {n===1?"kind":"kinders"}</option>)}</select></label><div className="childrenGrid">{children.map((child,index)=><div className="childBox" key={index}><h3>Kind {index+1}</h3><div className="formGrid"><label>Naam<input value={child.firstName} onChange={e=>updateChild(index,"firstName",e.target.value)} required/></label><label>Van<input value={child.lastName} onChange={e=>updateChild(index,"lastName",e.target.value)} required/></label></div><label>Ouderdom<input type="number" min="3" max="18" value={child.age} onChange={e=>updateChild(index,"age",e.target.value)} required/></label></div>)}</div><button className="primary" disabled={loading}>{loading?"Stoor...":"Skep ouerrekening"}</button></form></>:<><div className="adminHeader"><p>Ingeteken as <strong>{authUser.email}</strong></p><button type="button" className="secondary" onClick={signOutParent}>Teken uit</button></div><form className="form" onSubmit={bookSession}><p>Jou ouerrekening is gereed. Kies ’n oop sessietyd hieronder.</p><label>Kies sessie<select value={selected?.id||""} onChange={e=>setSelected(slots.find(s=>s.id===e.target.value)||null)} required><option value="">Kies ’n beskikbare sessie</option>{slots.filter(s=>s.available>0).map(s=><option key={s.id} value={s.id}>{s.date} • {s.time} • {s.available} plekke oor</option>)}</select></label><button className="primary" disabled={loading||!selected}>{loading?"Stuur...":"Stuur bespreekversoek • R150 per sessie"}</button></form></>}</section>}
 
+      {tab==="admin"&&!admin&&<section className="card formCard"><h2>Admin-aanmelding</h2><p className="muted">Meld aan om die akademie se sessies en besprekings te bestuur.</p><form className="form" onSubmit={e=>{e.preventDefault();void loadAdmin()}}><label>Admin PIN<input type="password" value={adminPin} onChange={e=>setAdminPin(e.target.value)} autoComplete="current-password" required/></label><button className="primary" disabled={loading}>{loading?"Meld aan...":"Meld aan as admin"}</button></form></section>}
       {tab==="admin"&&admin&&<div className="admin"><section className="card"><div className="adminHeader"><div><h2>Admin-beheer</h2><div className="muted">Bevestig bespreekversoeke voordat hulle finaal aanvaar word.</div></div><button className="secondary" onClick={()=>loadAdmin()}>{loading?"Laai...":"Verfris"}</button></div><div className="adminTabs"><button className={adminTab==="pending"?"active":""} onClick={()=>setAdminTab("pending")}>Pending Confirmations {pending.length>0&&<span className="count">{pending.length}</span>}</button><button className={adminTab==="confirmed"?"active":""} onClick={()=>setAdminTab("confirmed")}>Bevestig {confirmed.length}</button><button className={adminTab==="parents"?"active":""} onClick={()=>setAdminTab("parents")}>Geregistreerde ouers</button><button className={adminTab==="sessions"?"active":""} onClick={()=>setAdminTab("sessions")}>Sessies</button></div></section>
 
-        {adminTab==="pending"&&<section className="card"><h2>Pending Confirmations</h2>{pending.length===0?<p className="muted">Geen wagende besprekings nie.</p>:pending.map(b=>{const p=parentMap.get(b.parent_id);const s=slotMap.get(b.slot_id);const kids=admin?.children.filter(c=>c.parent_id===b.parent_id)||[];return <div className="bookingRow" key={b.id}><div><strong>{p?.first_name} {p?.last_name}</strong><div className="muted">{p?.contact_number} • {s?.session_date} • {String(s?.session_time||"").slice(0,5)}</div><div className="kids">{kids.map(k=><span key={k.id}>{k.first_name} {k.last_name} ({k.age})</span>)}</div></div><div className="actions"><button className="primary" onClick={()=>adminAction({action:"booking_status",bookingId:b.id,status:"confirmed"})}>✓ Bevestig</button><button className="danger" onClick={()=>adminAction({action:"booking_status",bookingId:b.id,status:"rejected"})}>Verwerp</button></div></div>})}</section>}
-        {adminTab==="confirmed"&&<section className="card"><h2>Bevestigde besprekings</h2>{confirmed.length===0?<p className="muted">Geen bevestigde besprekings nie.</p>:confirmed.map(b=>{const p=parentMap.get(b.parent_id);const s=slotMap.get(b.slot_id);return <div className="slotRow" key={b.id}><div><strong>{p?.first_name} {p?.last_name}</strong><div className="muted">{s?.session_date} • {String(s?.session_time||"").slice(0,5)} • {p?.contact_number}</div></div><button className="secondary" onClick={()=>adminAction({action:"booking_status",bookingId:b.id,status:"cancelled"})}>Kanselleer</button></div>})}</section>}
+        {adminTab==="pending"&&<section className="card"><h2>Pending Confirmations</h2>{pending.length===0?<p className="muted">Geen wagende besprekings nie.</p>:pending.map(b=>{const p=parentMap.get(b.parent_id);const s=slotMap.get(b.slot_id);const kids=admin?.children.filter(c=>c.parent_id===b.parent_id)||[];return <div className="bookingRow" key={b.id}><div><strong>{p?.first_name} {p?.last_name}</strong><div className="muted">{p?.contact_number} • {p?.email} • {s?.session_date} • {String(s?.session_time||"").slice(0,5)}</div><div className="kids">{kids.map(k=><span key={k.id}>{k.first_name} {k.last_name} ({k.age})</span>)}</div></div><div className="actions"><button className="primary" onClick={()=>adminAction({action:"booking_status",bookingId:b.id,status:"confirmed"})}>✓ Bevestig</button><button className="danger" onClick={()=>adminAction({action:"booking_status",bookingId:b.id,status:"rejected"})}>Verwerp</button></div></div>})}</section>}
+        {adminTab==="confirmed"&&<section className="card"><h2>Bevestigde besprekings</h2>{confirmed.length===0?<p className="muted">Geen bevestigde besprekings nie.</p>:confirmed.map(b=>{const p=parentMap.get(b.parent_id);const s=slotMap.get(b.slot_id);return <div className="slotRow" key={b.id}><div><strong>{p?.first_name} {p?.last_name}</strong><div className="muted">{s?.session_date} • {String(s?.session_time||"").slice(0,5)} • {p?.contact_number}</div></div><div className="actions"><button className="secondary" onClick={()=>adminAction({action:"resend_confirmation",bookingId:b.id})}>Stuur e-pos weer</button><button className="secondary" onClick={()=>adminAction({action:"booking_status",bookingId:b.id,status:"cancelled"})}>Kanselleer</button></div></div>})}</section>}
         {adminTab==="parents"&&<section className="card"><h2>Geregistreerde ouers</h2>{!admin?.parents.length?<p className="muted">Geen ouers geregistreer nie.</p>:admin.parents.map(p=><div className="slotRow" key={p.id}><div><strong>{p.first_name} {p.last_name}</strong><div className="muted">{p.contact_number} • {p.child_count} {p.child_count===1?"kind":"kinders"}</div></div><div className="kids">{admin.children.filter(c=>c.parent_id===p.id).map(c=><span key={c.id}>{c.first_name} {c.last_name} ({c.age})</span>)}</div></div>)}</section>}
         {adminTab==="sessions"&&<section className="card"><h2>Bestuur sessies</h2><form className="form formGrid" onSubmit={e=>{e.preventDefault();adminAction({action:"create_slot",date:newDate,time:newTime,capacity:3});setNewDate("")}}><label>Datum<input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)} required/></label><label>Tyd<input type="time" value={newTime} onChange={e=>setNewTime(e.target.value)} required/></label><button className="primary">+ Skep 3-kind sessie</button></form>{admin.slots.map(s=>{const count=admin.bookings.filter(b=>b.slot_id===s.id&&["pending","confirmed"].includes(b.status)).length;return <div className="slotRow" key={s.id}><div><strong>{s.session_date}</strong> • {String(s.session_time).slice(0,5)}<div className="muted">{count}/{s.capacity} aktiewe versoeke</div></div><button className="danger" onClick={()=>adminAction({action:"delete_slot",slotId:s.id})}>Verwyder</button></div>})}</section>}
       </div>}
     </main><footer className="footer">Klein Sterre Akademie • Elke Ster Begin Iewers • R150 per sessie</footer>
   </div>;
 }
+

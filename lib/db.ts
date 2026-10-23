@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SECRET_KEY;
 
@@ -32,9 +34,14 @@ export const db = {
   insert: (table: string, values: unknown, select = "*") => request(table, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(values) }).then((data) => data),
   update: (table: string, query: string, values: unknown) => request(`${table}?${query}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(values) }),
   delete: (table: string, query: string) => request(`${table}?${query}`, { method: "DELETE" }),
+  rpc: (functionName: string, values: unknown) => request(`rpc/${functionName}`, { method: "POST", body: JSON.stringify(values) }),
 };
 
 export function adminAllowed(pin: string | null) {
   const configured = process.env.ADMIN_PIN;
-  return Boolean(configured && pin && pin === configured);
+  if (!configured || !pin) return false;
+  const suppliedBytes = Buffer.from(pin);
+  const configuredBytes = Buffer.from(configured);
+  return suppliedBytes.length === configuredBytes.length && timingSafeEqual(suppliedBytes, configuredBytes);
 }
+
